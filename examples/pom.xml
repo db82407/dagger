@@ -31,6 +31,8 @@
 
   <modules>
     <module>simple</module>
+    <module>simple2</module>
+    <module>simple3</module>
     <module>android-simple</module>
     <module>android-activity-graphs</module>
   </modules>
