@@ -6,8 +6,10 @@ import javax.inject.Named;
 class Thermosiphon implements Pump {
   private final Heater heater;
 
-  @Inject @Named("water")
-  Thermosiphon(Heater heater) {
+  @Inject
+  Thermosiphon(
+		   @Named("water")
+		   Heater heater) {
     this.heater = heater;
   }
 
