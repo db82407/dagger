@@ -20,12 +20,17 @@ import com.google.auto.common.MoreElements;
 import com.google.auto.common.MoreTypes;
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Equivalence;
+import com.google.common.base.Equivalence.Wrapper;
+import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Optional;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Multimaps;
 import com.google.common.util.concurrent.ListenableFuture;
-import dagger.MapKey;
+import dagger.Multibindings;
 import dagger.Provides;
+import dagger.producers.Produced;
 import dagger.producers.Producer;
 import dagger.producers.Produces;
 import java.util.Map;
@@ -46,13 +51,12 @@ import javax.lang.model.util.Elements;
 import javax.lang.model.util.SimpleTypeVisitor6;
 import javax.lang.model.util.Types;
 
+import static com.google.auto.common.MoreTypes.asExecutable;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static dagger.internal.codegen.InjectionAnnotations.getQualifier;
 import static dagger.internal.codegen.MapKeys.getMapKey;
 import static dagger.internal.codegen.MapKeys.getUnwrappedMapKeyType;
-import static dagger.internal.codegen.Util.unwrapOptionalEquivalence;
-import static dagger.internal.codegen.Util.wrapOptionalInEquivalence;
 import static javax.lang.model.element.ElementKind.METHOD;
 
 /**
@@ -63,6 +67,13 @@ import static javax.lang.model.element.ElementKind.METHOD;
  */
 @AutoValue
 abstract class Key {
+  
+  /** An object that is associated with a {@link Key}. */
+  interface HasKey {
+    /** The key associated with this object. */
+    Key key();
+  }
+
   /**
    * A {@link javax.inject.Qualifier} annotation that provides a unique namespace prefix
    * for the type of this key.
@@ -154,6 +165,42 @@ abstract class Key {
         .toString();
   }
 
+  /**
+   * Indexes {@code haveKeys} by {@link HasKey#key()}.
+   */
+  static <T extends HasKey> ImmutableSetMultimap<Key, T> indexByKey(Iterable<T> haveKeys) {
+    return ImmutableSetMultimap.copyOf(
+        Multimaps.index(
+            haveKeys,
+            new Function<HasKey, Key>() {
+              @Override
+              public Key apply(HasKey hasKey) {
+                return hasKey.key();
+              }
+            }));
+  }
+
+  /**
+   * Wraps an {@link Optional} of a type in an {@code Optional} of a {@link Wrapper} for that type.
+   */
+  private static <T> Optional<Equivalence.Wrapper<T>> wrapOptionalInEquivalence(
+      Equivalence<T> equivalence, Optional<T> optional) {
+    return optional.isPresent()
+        ? Optional.of(equivalence.wrap(optional.get()))
+        : Optional.<Equivalence.Wrapper<T>>absent();
+  }
+
+  /**
+   * Unwraps an {@link Optional} of a {@link Wrapper} into an {@code Optional} of the underlying
+   * type.
+   */
+  private static <T> Optional<T> unwrapOptionalEquivalence(
+      Optional<Equivalence.Wrapper<T>> wrappedOptional) {
+    return wrappedOptional.isPresent()
+        ? Optional.of(wrappedOptional.get().get())
+        : Optional.<T>absent();
+  }
+
   static final class Factory {
     private final Types types;
     private final Elements elements;
@@ -201,6 +248,16 @@ abstract class Key {
       return forMethod(componentMethod, keyType);
     }
 
+    Key forSubcomponentBuilderMethod(
+        ExecutableElement subcomponentBuilderMethod, DeclaredType declaredContainer) {
+      checkNotNull(subcomponentBuilderMethod);
+      checkArgument(subcomponentBuilderMethod.getKind().equals(METHOD));
+      ExecutableType resolvedMethod =
+          asExecutable(types.asMemberOf(declaredContainer, subcomponentBuilderMethod));
+      TypeMirror returnType = normalize(types, resolvedMethod.getReturnType());
+      return forMethod(subcomponentBuilderMethod, returnType);
+    }
+
     Key forProvidesMethod(ExecutableType executableType, ExecutableElement method) {
       checkNotNull(method);
       checkArgument(method.getKind().equals(METHOD));
@@ -216,7 +273,7 @@ abstract class Key {
       return forMethod(method, keyType);
     }
 
-    // TODO(user): Reconcile this method with forProvidesMethod when Provides.Type and
+    // TODO(beder): Reconcile this method with forProvidesMethod when Provides.Type and
     // Produces.Type are no longer different.
     Key forProducesMethod(ExecutableType executableType, ExecutableElement method) {
       checkNotNull(method);
@@ -237,6 +294,28 @@ abstract class Key {
               Optional.of(producesAnnotation.type()));
       return forMethod(method, keyType);
     }
+    
+    /**
+     * Returns the key for a method in a {@link Multibindings @Multibindings} interface.
+     *
+     * The key's type is either {@code Set<T>} or {@code Map<K, F<V>>}, where {@code F} is either
+     * {@link Provider} or {@link Producer}, depending on {@code bindingType}.
+     */
+    Key forMultibindingsMethod(
+        BindingType bindingType, ExecutableType executableType, ExecutableElement method) {
+      checkArgument(method.getKind().equals(METHOD), "%s must be a method", method);
+      TypeElement factoryType =
+          elements.getTypeElement(bindingType.frameworkClass().getCanonicalName());
+      TypeMirror returnType = normalize(types, executableType.getReturnType());
+      TypeMirror keyType =
+          MapType.isMap(returnType)
+              ? mapOfFrameworkType(
+                  MapType.from(returnType).keyType(),
+                  factoryType,
+                  MapType.from(returnType).valueType())
+              : returnType;
+      return forMethod(method, keyType);
+    }
 
     private TypeMirror providesOrProducesKeyType(
         TypeMirror returnType,
@@ -251,10 +330,10 @@ abstract class Key {
         case SET:
           return types.getDeclaredType(getSetElement(), returnType);
         case MAP:
-          return mapOfFactoryType(
-              method,
-              returnType,
-              providesType.isPresent() ? getProviderElement() : getProducerElement());
+          return mapOfFrameworkType(
+              mapKeyType(method),
+              providesType.isPresent() ? getProviderElement() : getProducerElement(),
+              returnType);
         case SET_VALUES:
           // TODO(gak): do we want to allow people to use "covariant return" here?
           checkArgument(MoreTypes.isType(returnType) && MoreTypes.isTypeOf(Set.class, returnType));
@@ -264,17 +343,18 @@ abstract class Key {
       }
     }
 
-    private TypeMirror mapOfFactoryType(
-        ExecutableElement method, TypeMirror valueType, TypeElement factoryType) {
-      TypeMirror mapKeyType = mapKeyType(method);
-      TypeMirror mapValueFactoryType = types.getDeclaredType(factoryType, valueType);
-      return types.getDeclaredType(getMapElement(), mapKeyType, mapValueFactoryType);
+    /**
+     * Returns {@code Map<KeyType, FrameworkType<ValueType>>}.
+     */
+    private TypeMirror mapOfFrameworkType(
+        TypeMirror keyType, TypeElement frameworkType, TypeMirror valueType) {
+      return types.getDeclaredType(
+          getMapElement(), keyType, types.getDeclaredType(frameworkType, valueType));
     }
 
     private TypeMirror mapKeyType(ExecutableElement method) {
       AnnotationMirror mapKeyAnnotation = getMapKey(method).get();
-      MapKey mapKey = mapKeyAnnotation.getAnnotationType().asElement().getAnnotation(MapKey.class);
-      return mapKey.unwrapValue()
+      return MapKeys.unwrapValue(mapKeyAnnotation).isPresent()
           ? getUnwrappedMapKeyType(mapKeyAnnotation.getAnnotationType(), types)
           : mapKeyAnnotation.getAnnotationType();
     }
@@ -321,10 +401,39 @@ abstract class Key {
     /**
      * Optionally extract a {@link Key} for the underlying production binding(s) if such a
      * valid key can be inferred from the given key.  Specifically, if the key represents a
-     * {@link Map}{@code <K, V>}, a key of {@code Map<K, Producer<V>>} will be returned.
+     * {@link Map}{@code <K, V>} or {@code Map<K, Produced<V>>}, a key of
+     * {@code Map<K, Producer<V>>} will be returned.
      */
     Optional<Key> implicitMapProducerKeyFrom(Key possibleMapKey) {
-      return maybeWrapMapValue(possibleMapKey, Producer.class);
+      return maybeRewrapMapValue(possibleMapKey, Produced.class, Producer.class)
+          .or(maybeWrapMapValue(possibleMapKey, Producer.class));
+    }
+
+    /**
+     * Returns a key of {@link Map}{@code <K, NewWrappingClass<V>>} if the input key represents a
+     * {@code Map<K, CurrentWrappingClass<V>>}.
+     */
+    private Optional<Key> maybeRewrapMapValue(
+        Key possibleMapKey, Class<?> currentWrappingClass, Class<?> newWrappingClass) {
+      checkArgument(!currentWrappingClass.equals(newWrappingClass));
+      if (MapType.isMap(possibleMapKey.type())) {
+        MapType mapType = MapType.from(possibleMapKey.type());
+        if (mapType.valuesAreTypeOf(currentWrappingClass)) {
+          TypeElement wrappingElement = getClassElement(newWrappingClass);
+          if (wrappingElement == null) {
+            // This target might not be compiled with Producers, so wrappingClass might not have an
+            // associated element.
+            return Optional.absent();
+          }
+          DeclaredType wrappedValueType =
+              types.getDeclaredType(
+                  wrappingElement, mapType.unwrappedValueType(currentWrappingClass));
+          TypeMirror wrappedMapType =
+              types.getDeclaredType(getMapElement(), mapType.keyType(), wrappedValueType);
+          return Optional.of(possibleMapKey.withType(types, wrappedMapType));
+        }
+      }
+      return Optional.absent();
     }
 
     /**
@@ -332,22 +441,37 @@ abstract class Key {
      * {@code Map<K, V>}.
      */
     private Optional<Key> maybeWrapMapValue(Key possibleMapKey, Class<?> wrappingClass) {
-      if (MoreTypes.isTypeOf(Map.class, possibleMapKey.type())) {
-        DeclaredType declaredMapType = MoreTypes.asDeclared(possibleMapKey.type());
-        TypeMirror mapValueType = Util.getValueTypeOfMap(declaredMapType);
-        if (!MoreTypes.isTypeOf(wrappingClass, mapValueType)) {
-          DeclaredType keyType = Util.getKeyTypeOfMap(declaredMapType);
+      if (MapType.isMap(possibleMapKey.type())) {
+        MapType mapType = MapType.from(possibleMapKey.type());
+        if (!mapType.valuesAreTypeOf(wrappingClass)) {
           TypeElement wrappingElement = getClassElement(wrappingClass);
           if (wrappingElement == null) {
             // This target might not be compiled with Producers, so wrappingClass might not have an
             // associated element.
             return Optional.absent();
           }
-          DeclaredType wrappedType = types.getDeclaredType(wrappingElement, mapValueType);
-          TypeMirror mapType = types.getDeclaredType(getMapElement(), keyType, wrappedType);
-          return Optional.<Key>of(new AutoValue_Key(
-              possibleMapKey.wrappedQualifier(),
-              MoreTypes.equivalence().wrap(mapType)));
+          DeclaredType wrappedValueType =
+              types.getDeclaredType(wrappingElement, mapType.valueType());
+          TypeMirror wrappedMapType =
+              types.getDeclaredType(getMapElement(), mapType.keyType(), wrappedValueType);
+          return Optional.of(possibleMapKey.withType(types, wrappedMapType));
+        }
+      }
+      return Optional.absent();
+    }
+
+    /**
+     * Optionally extract a {@link Key} for a {@code Set<T>} if the given key is for
+     * {@code Set<Produced<T>>}.
+     */
+    Optional<Key> implicitSetKeyFromProduced(Key possibleSetOfProducedKey) {
+      if (MoreTypes.isTypeOf(Set.class, possibleSetOfProducedKey.type())) {
+        TypeMirror argType =
+            MoreTypes.asDeclared(possibleSetOfProducedKey.type()).getTypeArguments().get(0);
+        if (MoreTypes.isTypeOf(Produced.class, argType)) {
+          TypeMirror producedArgType = MoreTypes.asDeclared(argType).getTypeArguments().get(0);
+          TypeMirror setType = types.getDeclaredType(getSetElement(), producedArgType);
+          return Optional.of(possibleSetOfProducedKey.withType(types, setType));
         }
       }
       return Optional.absent();

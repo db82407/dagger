@@ -20,6 +20,9 @@ import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
+import dagger.internal.codegen.BindingType.HasBindingType;
+import dagger.internal.codegen.Key.HasKey;
+import dagger.internal.codegen.SourceElement.HasSourceElement;
 import java.util.List;
 import java.util.Set;
 import javax.lang.model.element.Element;
@@ -31,7 +34,6 @@ import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.WildcardType;
-import javax.lang.model.util.SimpleElementVisitor6;
 import javax.lang.model.util.SimpleTypeVisitor6;
 import javax.lang.model.util.Types;
 
@@ -46,42 +48,27 @@ import static javax.lang.model.element.Modifier.PUBLIC;
  * @author Gregory Kick
  * @since 2.0
  */
-abstract class Binding {
-  static Optional<String> bindingPackageFor(Iterable<? extends Binding> bindings) {
-    ImmutableSet.Builder<String> bindingPackagesBuilder = ImmutableSet.builder();
-    for (Binding binding : bindings) {
-      bindingPackagesBuilder.addAll(binding.bindingPackage().asSet());
-    }
-    ImmutableSet<String> bindingPackages = bindingPackagesBuilder.build();
-    switch (bindingPackages.size()) {
-      case 0:
-        return Optional.absent();
-      case 1:
-        return Optional.of(bindingPackages.iterator().next());
-      default:
-        throw new IllegalArgumentException();
-    }
+abstract class Binding implements HasBindingType, HasKey, HasSourceElement {
+
+  /**
+   * Returns the framework class associated with this binding.
+   */
+  Class<?> frameworkClass() {
+    return bindingType().frameworkClass();
   }
 
   /** The {@link Key} that is provided by this binding. */
-  protected abstract Key key();
+  @Override
+  public abstract Key key();
 
   /** Returns the {@link Element} instance that is responsible for declaring the binding. */
-  abstract Element bindingElement();
+  Element bindingElement() {
+    return sourceElement().element();
+  }
 
   /** The type enclosing the binding {@link #bindingElement()}. */
   TypeElement bindingTypeElement() {
-    return bindingElement().accept(new SimpleElementVisitor6<TypeElement, Void>() {
-      @Override
-      protected TypeElement defaultAction(Element e, Void p) {
-        return MoreElements.asType(bindingElement().getEnclosingElement());
-      }
-
-      @Override
-      public TypeElement visitType(TypeElement e, Void p) {
-        return e;
-      }
-    }, null);
+    return sourceElement().enclosingTypeElement();
   }
 
   /**
@@ -155,10 +142,18 @@ abstract class Binding {
   }
 
   /**
-   * Returns true if this is a binding for a key that has a different type parameter list than the
-   * element it's providing.
+   * if this binding's key's type parameters are different from those of the
+   * {@link #bindingTypeElement()}, this is the binding for the {@link #bindingTypeElement()}'s
+   * unresolved type.
    */
-  abstract boolean hasNonDefaultTypeParameters();
+  abstract Optional<? extends Binding> unresolved();
+
+  /**
+   * The scope of this binding.
+   */
+  Scope scope() {
+    return Scope.unscoped();
+  }
 
   // TODO(sameb): Remove the TypeElement parameter and pull it from the TypeMirror.
   static boolean hasNonDefaultTypeParameters(TypeElement element, TypeMirror type, Types types) {
@@ -166,25 +161,27 @@ abstract class Binding {
     if (element.getTypeParameters().isEmpty()) {
       return false;
     }
-    
+
     List<TypeMirror> defaultTypes = Lists.newArrayList();
     for (TypeParameterElement parameter : element.getTypeParameters()) {
       defaultTypes.add(parameter.asType());
     }
-    
-    List<TypeMirror> actualTypes =
-        type.accept(new SimpleTypeVisitor6<List<TypeMirror>, Void>() {
-          @Override
-          protected List<TypeMirror> defaultAction(TypeMirror e, Void p) {
-            return ImmutableList.of();
-          }
 
-          @Override
-          public List<TypeMirror> visitDeclared(DeclaredType t, Void p) {
-            return ImmutableList.copyOf(t.getTypeArguments());
-          }
-        }, null);
-    
+    List<TypeMirror> actualTypes =
+        type.accept(
+            new SimpleTypeVisitor6<List<TypeMirror>, Void>() {
+              @Override
+              protected List<TypeMirror> defaultAction(TypeMirror e, Void p) {
+                return ImmutableList.of();
+              }
+
+              @Override
+              public List<TypeMirror> visitDeclared(DeclaredType t, Void p) {
+                return ImmutableList.<TypeMirror>copyOf(t.getTypeArguments());
+              }
+            },
+            null);
+
     // The actual type parameter size can be different if the user is using a raw type.
     if (defaultTypes.size() != actualTypes.size()) {
       return true;

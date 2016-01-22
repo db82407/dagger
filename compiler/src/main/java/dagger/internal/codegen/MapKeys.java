@@ -48,6 +48,7 @@ import static com.google.auto.common.AnnotationMirrors.getAnnotationValuesWithDe
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterables.transform;
+import static dagger.internal.codegen.SourceFiles.classFileName;
 import static dagger.internal.codegen.writer.Snippet.makeParametersSnippet;
 import static javax.lang.model.util.ElementFilter.methodsIn;
 
@@ -74,6 +75,22 @@ final class MapKeys {
    */
   static ImmutableSet<? extends AnnotationMirror> getMapKeys(Element bindingElement) {
     return getAnnotatedAnnotations(bindingElement, MapKey.class);
+  }
+
+  /**
+   * Returns the annotation value if {@code mapKey}'s type is annotated with
+   * {@link MapKey @MapKey(unwrapValue = true)}.
+   *
+   * @throws IllegalArgumentException if {@code mapKey}'s type is not annotated with
+   *     {@link MapKey @MapKey} at all.
+   */
+  static Optional<? extends AnnotationValue> unwrapValue(AnnotationMirror mapKey) {
+    MapKey mapKeyAnnotation = mapKey.getAnnotationType().asElement().getAnnotation(MapKey.class);
+    checkArgument(
+        mapKeyAnnotation != null, "%s is not annotated with @MapKey", mapKey.getAnnotationType());
+    return mapKeyAnnotation.unwrapValue()
+        ? Optional.of(getOnlyElement(mapKey.getElementValues().values()))
+        : Optional.<AnnotationValue>absent();
   }
 
   /**
@@ -120,11 +137,20 @@ final class MapKeys {
    * Returns the name of the generated class that contains the static {@code create} methods for a
    * {@link MapKey} annotation type.
    */
+  public static com.squareup.javapoet.ClassName getJavapoetMapKeyCreatorClassName(
+      TypeElement mapKeyType) {
+    com.squareup.javapoet.ClassName mapKeyTypeName =
+        com.squareup.javapoet.ClassName.get(mapKeyType);
+    return mapKeyTypeName.topLevelClassName().peerClass(classFileName(mapKeyTypeName) + "Creator");
+  }
+
+  /**
+   * Returns the name of the generated class that contains the static {@code create} methods for a
+   * {@link MapKey} annotation type.
+   */
   public static ClassName getMapKeyCreatorClassName(TypeElement mapKeyType) {
-    ClassName enclosingClassName = ClassName.fromTypeElement(mapKeyType);
-    return enclosingClassName
-        .topLevelClassName()
-        .peerNamed(enclosingClassName.classFileName() + "Creator");
+    ClassName mapKeyTypeName = ClassName.fromTypeElement(mapKeyType);
+    return mapKeyTypeName.topLevelClassName().peerNamed(mapKeyTypeName.classFileName() + "Creator");
   }
 
   /**
@@ -138,11 +164,12 @@ final class MapKeys {
    */
   static Snippet getMapKeySnippet(Element bindingElement) {
     AnnotationMirror mapKey = getMapKey(bindingElement).get();
-    TypeElement mapKeyAnnotationType = MoreTypes.asTypeElement(mapKey.getAnnotationType());
-    ClassName mapKeyCreator = MapKeys.getMapKeyCreatorClassName(mapKeyAnnotationType);
-    if (mapKeyAnnotationType.getAnnotation(MapKey.class).unwrapValue()) {
-      AnnotationValue memberToUnwrap = getOnlyElement(mapKey.getElementValues().values());
-      return new MapKeySnippetExceptArrays(mapKeyCreator).visit(memberToUnwrap, memberToUnwrap);
+    ClassName mapKeyCreator =
+        getMapKeyCreatorClassName(MoreTypes.asTypeElement(mapKey.getAnnotationType()));
+    Optional<? extends AnnotationValue> unwrappedValue = unwrapValue(mapKey);
+    if (unwrappedValue.isPresent()) {
+      return new MapKeySnippetExceptArrays(mapKeyCreator)
+          .visit(unwrappedValue.get(), unwrappedValue.get());
     } else {
       return annotationSnippet(mapKey, new MapKeySnippet(mapKeyCreator));
     }

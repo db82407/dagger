@@ -25,6 +25,7 @@ import org.junit.runners.JUnit4;
 
 import static com.google.common.truth.Truth.assert_;
 import static com.google.testing.compile.JavaSourcesSubjectFactory.javaSources;
+import static dagger.internal.codegen.GeneratedLines.GENERATED_ANNOTATION;
 import static java.util.Arrays.asList;
 
 @RunWith(JUnit4.class)
@@ -74,7 +75,7 @@ public final class PrimitiveInjectionTest {
       "import javax.annotation.Generated;",
       "import javax.inject.Provider;",
       "",
-      "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
+      GENERATED_ANNOTATION,
       "public final class DaggerPrimitiveComponent implements PrimitiveComponent {",
       "  private Provider<Integer> primitiveIntProvider;",
       "  private Provider<PrimitiveInjectable> primitiveInjectableProvider;",
@@ -92,6 +93,7 @@ public final class PrimitiveInjectionTest {
       "    return builder().build();",
       "  }",
       "",
+      "  @SuppressWarnings(\"unchecked\")",
       "  private void initialize(final Builder builder) {",
       "    this.primitiveIntProvider =",
       "        PrimitiveModule_PrimitiveIntFactory.create(builder.primitiveModule);",
@@ -124,7 +126,7 @@ public final class PrimitiveInjectionTest {
       "",
       "    public Builder primitiveModule(PrimitiveModule primitiveModule) {",
       "      if (primitiveModule == null) {",
-      "        throw new NullPointerException(\"primitiveModule\");",
+      "        throw new NullPointerException();",
       "      }",
       "      this.primitiveModule = primitiveModule;",
       "      return this;",

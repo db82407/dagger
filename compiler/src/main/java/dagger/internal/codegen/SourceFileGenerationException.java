@@ -35,7 +35,8 @@ import static javax.tools.Diagnostic.Kind.ERROR;
  * @author Gregory Kick
  * @since 2.0
  */
-final class SourceFileGenerationException extends Exception implements PrintableErrorMessage {
+final class SourceFileGenerationException extends Exception {
+  // TODO(ronshapiro): remove these unused values
   private final ImmutableSet<ClassName> generatedClassNames;
   private final Optional<? extends Element> associatedElement;
 
@@ -55,6 +56,15 @@ final class SourceFileGenerationException extends Exception implements Printable
     this(generatedClassNames, cause, Optional.of(associatedElement));
   }
 
+  SourceFileGenerationException(
+      Optional<com.squareup.javapoet.ClassName> generatedClassName,
+      Throwable cause,
+      Optional<? extends Element> associatedElement) {
+    super(createMessage(generatedClassName, cause.getMessage()), cause);
+    this.generatedClassNames = ImmutableSet.of();
+    this.associatedElement = checkNotNull(associatedElement);
+  }
+
   public ImmutableSet<ClassName> generatedClassNames() {
     return generatedClassNames;
   }
@@ -71,8 +81,16 @@ final class SourceFileGenerationException extends Exception implements Printable
         message);
   }
 
-  @Override
-  public void printMessageTo(Messager messager) {
+  private static String createMessage(
+      Optional<com.squareup.javapoet.ClassName> generatedClassName, String message) {
+    return String.format("Could not generate %s: %s.",
+        generatedClassName.isPresent()
+            ? generatedClassName.get()
+            : "unknown file",
+        message);
+  }
+
+  void printMessageTo(Messager messager) {
     if (associatedElement.isPresent()) {
       messager.printMessage(ERROR, getMessage(), associatedElement.get());
     } else {

@@ -15,8 +15,16 @@
  */
 package dagger.internal.codegen;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.testing.compile.JavaFileObjects;
+import java.io.IOException;
+import java.io.Writer;
+import java.util.Set;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.element.TypeElement;
 import javax.tools.JavaFileObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -25,6 +33,9 @@ import org.junit.runners.JUnit4;
 import static com.google.common.truth.Truth.assertAbout;
 import static com.google.testing.compile.JavaSourceSubjectFactory.javaSource;
 import static com.google.testing.compile.JavaSourcesSubjectFactory.javaSources;
+import static dagger.internal.codegen.GeneratedLines.GENERATED_ANNOTATION;
+import static dagger.internal.codegen.GeneratedLines.GENERATED_ANNOTATION_JAVAPOET;
+import static javax.tools.StandardLocation.CLASS_OUTPUT;
 
 @RunWith(JUnit4.class)
 public class MembersInjectionTest {
@@ -57,12 +68,11 @@ public class MembersInjectionTest {
         "test.DaggerTestComponent",
         "package test;",
         "",
-        "import dagger.MembersInjector;",
         "import dagger.internal.MembersInjectors;",
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
+        GENERATED_ANNOTATION,
         "public final class DaggerTestComponent implements TestComponent {",
         "  private Provider<Child> childProvider;",
         "",
@@ -79,9 +89,10 @@ public class MembersInjectionTest {
         "    return builder().build();",
         "  }",
         "",
+        "  @SuppressWarnings(\"unchecked\")",
         "  private void initialize(final Builder builder) {",
         "    this.childProvider =",
-        "        Child_Factory.create((MembersInjector) MembersInjectors.noOp());",
+        "        Child_Factory.create(MembersInjectors.<Child>noOp());",
         "  }",
         "",
         "  @Override",
@@ -141,59 +152,58 @@ public class MembersInjectionTest {
         "interface TestComponent {",
         "  Child child();",
         "}");
-    JavaFileObject generatedComponent = JavaFileObjects.forSourceLines(
-        "test.DaggerTestComponent",
-        "package test;",
-        "",
-        "import dagger.MembersInjector;",
-        "import dagger.internal.MembersInjectors;",
-        "import javax.annotation.Generated;",
-        "import javax.inject.Provider;",
-        "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
-        "public final class DaggerTestComponent implements TestComponent {",
-        "  private MembersInjector<Parent> parentMembersInjector;",
-        "  private MembersInjector<Child> childMembersInjector;",
-        "  private Provider<Child> childProvider;",
-        "",
-        "  private DaggerTestComponent(Builder builder) {",
-        "    assert builder != null;",
-        "    initialize(builder);",
-        "  }",
-        "",
-        "  public static Builder builder() {",
-        "    return new Builder();",
-        "  }",
-        "",
-        "  public static TestComponent create() {",
-        "    return builder().build();",
-        "  }",
-        "",
-        "  private void initialize(final Builder builder) {",
-        "    this.parentMembersInjector = Parent_MembersInjector.create(Dep_Factory.create());",
-        "    this.childMembersInjector = MembersInjectors.delegatingTo(parentMembersInjector);",
-        "    this.childProvider = Child_Factory.create(childMembersInjector);",
-        "  }",
-        "",
-        "  @Override",
-        "  public Child child() {",
-        "    return childProvider.get();",
-        "  }",
-        "",
-        "  public static final class Builder {",
-        "    private Builder() {",
-        "    }",
-        "",
-        "    public TestComponent build() {",
-        "      return new DaggerTestComponent(this);",
-        "    }",
-        "  }",
-        "}");
+    JavaFileObject generatedComponent =
+        JavaFileObjects.forSourceLines(
+            "test.DaggerTestComponent",
+            "package test;",
+            "",
+            "import dagger.MembersInjector;",
+            "import javax.annotation.Generated;",
+            "import javax.inject.Provider;",
+            "",
+            GENERATED_ANNOTATION,
+            "public final class DaggerTestComponent implements TestComponent {",
+            "  private MembersInjector<Child> childMembersInjector;",
+            "  private Provider<Child> childProvider;",
+            "",
+            "  private DaggerTestComponent(Builder builder) {",
+            "    assert builder != null;",
+            "    initialize(builder);",
+            "  }",
+            "",
+            "  public static Builder builder() {",
+            "    return new Builder();",
+            "  }",
+            "",
+            "  public static TestComponent create() {",
+            "    return builder().build();",
+            "  }",
+            "",
+            "  @SuppressWarnings(\"unchecked\")",
+            "  private void initialize(final Builder builder) {",
+            "    this.childMembersInjector = Child_MembersInjector.create(Dep_Factory.create());",
+            "    this.childProvider = Child_Factory.create(childMembersInjector);",
+            "  }",
+            "",
+            "  @Override",
+            "  public Child child() {",
+            "    return childProvider.get();",
+            "  }",
+            "",
+            "  public static final class Builder {",
+            "    private Builder() {}",
+            "",
+            "    public TestComponent build() {",
+            "      return new DaggerTestComponent(this);",
+            "    }",
+            "  }",
+            "}");
     assertAbout(javaSources())
         .that(ImmutableList.of(childFile, parentFile, depFile, componentFile))
         .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(generatedComponent);
+        .and()
+        .generatesSources(generatedComponent);
   }
 
   @Test public void fieldAndMethodGenerics() {
@@ -209,14 +219,15 @@ public class MembersInjectionTest {
         "",
         " @Inject void register(B b) {}",
         "}");
-    JavaFileObject expected = JavaFileObjects.forSourceLines("test.GenericClass_MembersInjector",
+    JavaFileObject expected = JavaFileObjects.forSourceLines(
+        "test.GenericClass_MembersInjector",
         "package test;",
         "",
         "import dagger.MembersInjector;",
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
+        GENERATED_ANNOTATION_JAVAPOET,
         "public final class GenericClass_MembersInjector<A, B>",
         "    implements MembersInjector<GenericClass<A, B>> {",
         "  private final Provider<A> aProvider;",
@@ -229,24 +240,36 @@ public class MembersInjectionTest {
         "    this.bProvider = bProvider;",
         "  }",
         "",
-        "  @Override",
-        "  public void injectMembers(GenericClass<A, B> instance) {",
-        "    if (instance == null) {",
-        "      throw new NullPointerException(\"Cannot inject members into a null reference\")",
-        "    }",
-        "    instance.a = aProvider.get();",
-        "    instance.register(bProvider.get())",
-        "  }",
-        "",
         "  public static <A, B> MembersInjector<GenericClass<A, B>> create(",
         "      Provider<A> aProvider, Provider<B> bProvider) {",
         "    return new GenericClass_MembersInjector<A, B>(aProvider, bProvider);",
         "  }",
+        "",
+        "  @Override",
+        "  public void injectMembers(GenericClass<A, B> instance) {",
+        "    if (instance == null) {",
+        "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
+        "    }",
+        "    instance.a = aProvider.get();",
+        "    instance.register(bProvider.get());",
+        "  }",
+        "",
+        "  public static <A, B> void injectA(GenericClass<A, B> instance, Provider<A> aProvider) {",
+        "    instance.a = aProvider.get();",
+        "  }",
+        "",
+        "  public static <A, B> void injectRegister(",
+        "      GenericClass<A, B> instance, Provider<B> bProvider) {",
+        "    instance.register(bProvider.get());",
+        "  }",
+        "",
         "}");
-    assertAbout(javaSource()).that(file)
+    assertAbout(javaSource())
+        .that(file)
         .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(expected);
+        .and()
+        .generatesSources(expected);
   }
 
   @Test public void subclassedGenericMembersInjectors() {
@@ -289,51 +312,62 @@ public class MembersInjectionTest {
         "",
         "  @Inject Child() {}",
         "}");
-    JavaFileObject expected = JavaFileObjects.forSourceLines("test.GenericClass_MembersInjector",
+    JavaFileObject expected = JavaFileObjects.forSourceLines(
+        "test.Child_MembersInjector",
         "package test;",
         "",
         "import dagger.MembersInjector;",
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
+        GENERATED_ANNOTATION_JAVAPOET,
         "public final class Child_MembersInjector<T>",
         "    implements MembersInjector<Child<T>> {",
-        "  private final MembersInjector<Parent<T, A>> supertypeInjector;",
-        "  private final Provider<A> aProvider;",
-        "  private final Provider<T> tProvider;",
+        "  private final Provider<T> tAndXProvider;",
+        "  private final Provider<A> aAndYProvider;",
+        "  private final Provider<A2> a2Provider;",
         "",
         "  public Child_MembersInjector(",
-        "      MembersInjector<Parent<T, A>> supertypeInjector, ",
-        "      Provider<A> aProvider, Provider<T> tProvider) {",
-        "    assert supertypeInjector != null;",
-        "    this.supertypeInjector = supertypeInjector;",
-        "    assert aProvider != null;",
-        "    this.aProvider = aProvider;",
-        "    assert tProvider != null;",
-        "    this.tProvider = tProvider;",
+        "      Provider<T> tAndXProvider, Provider<A> aAndYProvider, Provider<A2> a2Provider) {",
+        "    assert tAndXProvider != null;",
+        "    this.tAndXProvider = tAndXProvider;",
+        "    assert aAndYProvider != null;",
+        "    this.aAndYProvider = aAndYProvider;",
+        "    assert a2Provider != null;",
+        "    this.a2Provider = a2Provider;",
+        "  }",
+        "",
+        "  public static <T> MembersInjector<Child<T>> create(",
+        "      Provider<T> tAndXProvider, Provider<A> aAndYProvider, Provider<A2> a2Provider) {",
+        "    return new Child_MembersInjector<T>(tAndXProvider, aAndYProvider, a2Provider);",
         "  }",
         "",
         "  @Override",
         "  public void injectMembers(Child<T> instance) {",
         "    if (instance == null) {",
-        "      throw new NullPointerException(\"Cannot inject members into a null reference\")",
+        "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
         "    }",
-        "    supertypeInjector.injectMembers(instance);",
-        "    instance.a = aProvider.get();",
-        "    instance.t = tProvider.get();",
+        "    ((Parent) instance).x = tAndXProvider.get();",
+        "    ((Parent) instance).y = aAndYProvider.get();",
+        "    ((Parent) instance).a2 = a2Provider.get();",
+        "    instance.a = aAndYProvider.get();",
+        "    instance.t = tAndXProvider.get();",
         "  }",
         "",
-        "  public static <T> MembersInjector<Child<T>> create(",
-        "      MembersInjector<Parent<T, A>> supertypeInjector, ",
-        "      Provider<A> aProvider, Provider<T> tProvider) {",
-        "    return new Child_MembersInjector<T>(supertypeInjector, aProvider, tProvider);",
+        "  public static <T> void injectA(Child<T> instance, Provider<A> aProvider) {",
+        "    instance.a = aProvider.get();",
+        "  }",
+        "",
+        "  public static <T> void injectT(Child<T> instance, Provider<T> tProvider) {",
+        "    instance.t = tProvider.get();",
         "  }",
         "}");
-    assertAbout(javaSources()).that(ImmutableList.of(a, a2, parent, child))
+    assertAbout(javaSources())
+        .that(ImmutableList.of(a, a2, parent, child))
         .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(expected);
+        .and()
+        .generatesSources(expected);
   }
 
   @Test public void fieldInjection() {
@@ -349,7 +383,8 @@ public class MembersInjectionTest {
         "  @Inject Lazy<String> lazyString;",
         "  @Inject Provider<String> stringProvider;",
         "}");
-    JavaFileObject expected = JavaFileObjects.forSourceLines("test.FieldInjection_MembersInjector",
+    JavaFileObject expected = JavaFileObjects.forSourceLines(
+        "test.FieldInjection_MembersInjector",
         "package test;",
         "",
         "import dagger.MembersInjector;",
@@ -357,10 +392,9 @@ public class MembersInjectionTest {
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
-        "public final class FieldInjection_MembersInjector ",
+        GENERATED_ANNOTATION_JAVAPOET,
+        "public final class FieldInjection_MembersInjector",
         "    implements MembersInjector<FieldInjection> {",
-        "",
         "  private final Provider<String> stringProvider;",
         "",
         "  public FieldInjection_MembersInjector(Provider<String> stringProvider) {",
@@ -368,7 +402,12 @@ public class MembersInjectionTest {
         "    this.stringProvider = stringProvider;",
         "  }",
         "",
-        "  @Override public void injectMembers(FieldInjection instance) {",
+        "  public static MembersInjector<FieldInjection> create(Provider<String> stringProvider) {",
+        "    return new FieldInjection_MembersInjector(stringProvider);",
+        "  }",
+        "",
+        "  @Override",
+        "  public void injectMembers(FieldInjection instance) {",
         "    if (instance == null) {",
         "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
         "    }",
@@ -377,14 +416,27 @@ public class MembersInjectionTest {
         "    instance.stringProvider = stringProvider;",
         "  }",
         "",
-        "  public static MembersInjector<FieldInjection> create(",
-        "      Provider<String> stringProvider) {",
-        "    return new FieldInjection_MembersInjector(stringProvider);",
+        "  public static void injectString(",
+        "      FieldInjection instance, Provider<String> stringProvider) {",
+        "    instance.string = stringProvider.get();",
+        "  }",
+        "",
+        "  public static void injectLazyString(",
+        "      FieldInjection instance, Provider<String> lazyStringProvider) {",
+        "    instance.lazyString = DoubleCheckLazy.create(lazyStringProvider);",
+        "  }",
+        "",
+        "  public static void injectStringProvider(",
+        "      FieldInjection instance, Provider<String> stringProvider) {",
+        "    instance.stringProvider = stringProvider;",
         "  }",
         "}");
-    assertAbout(javaSource()).that(file).processedWith(new ComponentProcessor())
+    assertAbout(javaSource())
+        .that(file)
+        .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(expected);
+        .and()
+        .generatesSources(expected);
   }
 
   @Test public void methodInjection() {
@@ -410,9 +462,9 @@ public class MembersInjectionTest {
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
-        "public final class MethodInjection_MembersInjector ",
-        "    implements MembersInjector<MethodInjection> {",
+        GENERATED_ANNOTATION_JAVAPOET,
+        "public final class MethodInjection_MembersInjector",
+        "     implements MembersInjector<MethodInjection> {",
         "",
         "  private final Provider<String> stringProvider;",
         "",
@@ -421,7 +473,13 @@ public class MembersInjectionTest {
         "    this.stringProvider = stringProvider;",
         "  }",
         "",
-        "  @Override public void injectMembers(MethodInjection instance) {",
+        "  public static MembersInjector<MethodInjection> create(",
+        "      Provider<String> stringProvider) {",
+        "    return new MethodInjection_MembersInjector(stringProvider);",
+        "  }",
+        "",
+        "  @Override",
+        "  public void injectMembers(MethodInjection instance) {",
         "    if (instance == null) {",
         "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
         "    }",
@@ -431,18 +489,38 @@ public class MembersInjectionTest {
         "        stringProvider);",
         "  }",
         "",
-        "  public static MembersInjector<MethodInjection> create(",
-        "      Provider<String> stringProvider) {",
-        "    return new MethodInjection_MembersInjector(stringProvider);",
+        "  public static void injectNoArgs(MethodInjection instance) {",
+        "    instance.noArgs();",
+        "  }",
+        "",
+        "  public static void injectOneArg(",
+        "      MethodInjection instance, Provider<String> stringProvider) {",
+        "    instance.oneArg(stringProvider.get());",
+        "  }",
+        "",
+        "  public static void injectManyArgs(",
+        "      MethodInjection instance,",
+        "      Provider<String> stringProvider,",
+        "      Provider<String> lazyStringProvider,",
+        "      Provider<String> stringProvider2) {",
+        "    instance.manyArgs(",
+        "        stringProvider.get(),",
+        "        DoubleCheckLazy.create(lazyStringProvider),",
+        "        stringProvider2);",
         "  }",
         "}");
-    assertAbout(javaSource()).that(file).processedWith(new ComponentProcessor())
+    assertAbout(javaSource())
+        .that(file)
+        .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(expected);
+        .and()
+        .generatesSources(expected);
   }
 
-  @Test public void mixedMemberInjection() {
-    JavaFileObject file = JavaFileObjects.forSourceLines("test.MixedMemberInjection",
+  @Test
+  public void mixedMemberInjection() {
+    JavaFileObject file = JavaFileObjects.forSourceLines(
+        "test.MixedMemberInjection",
         "package test;",
         "",
         "import dagger.Lazy;",
@@ -463,14 +541,15 @@ public class MembersInjectionTest {
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
-        "public final class MixedMemberInjection_MembersInjector ",
+        GENERATED_ANNOTATION_JAVAPOET,
+        "public final class MixedMemberInjection_MembersInjector",
         "    implements MembersInjector<MixedMemberInjection> {",
         "",
         "  private final Provider<String> stringAndSProvider;",
         "  private final Provider<Object> objectAndOProvider;",
         "",
-        "  public MixedMemberInjection_MembersInjector(Provider<String> stringAndSProvider,",
+        "  public MixedMemberInjection_MembersInjector(",
+        "      Provider<String> stringAndSProvider,",
         "      Provider<Object> objectAndOProvider) {",
         "    assert stringAndSProvider != null;",
         "    this.stringAndSProvider = stringAndSProvider;",
@@ -478,7 +557,15 @@ public class MembersInjectionTest {
         "    this.objectAndOProvider = objectAndOProvider;",
         "  }",
         "",
-        "  @Override public void injectMembers(MixedMemberInjection instance) {",
+        "  public static MembersInjector<MixedMemberInjection> create(",
+        "      Provider<String> stringAndSProvider,",
+        "      Provider<Object> objectAndOProvider) {",
+        "    return new MixedMemberInjection_MembersInjector(",
+        "        stringAndSProvider, objectAndOProvider);",
+        "  }",
+        "",
+        "  @Override",
+        "  public void injectMembers(MixedMemberInjection instance) {",
         "    if (instance == null) {",
         "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
         "    }",
@@ -488,16 +575,32 @@ public class MembersInjectionTest {
         "    instance.setObject(objectAndOProvider.get());",
         "  }",
         "",
-        "  public static MembersInjector<MixedMemberInjection> create(",
-        "      Provider<String> stringAndSProvider,",
-        "      Provider<Object> objectAndOProvider) {",
-        "    return new MixedMemberInjection_MembersInjector(",
-        "        stringAndSProvider, objectAndOProvider);",
+        "  public static void injectString(",
+        "      MixedMemberInjection instance, Provider<String> stringProvider) {",
+        "    instance.string = stringProvider.get();",
+        "  }",
+        "",
+        "  public static void injectObject(",
+        "      MixedMemberInjection instance, Provider<Object> objectProvider) {",
+        "    instance.object = objectProvider.get();",
+        "  }",
+        "",
+        "  public static void injectSetString(",
+        "      MixedMemberInjection instance, Provider<String> sProvider) {",
+        "    instance.setString(sProvider.get());",
+        "  }",
+        "",
+        "  public static void injectSetObject(",
+        "      MixedMemberInjection instance, Provider<Object> oProvider) {",
+        "    instance.setObject(oProvider.get());",
         "  }",
         "}");
-    assertAbout(javaSource()).that(file).processedWith(new ComponentProcessor())
+    assertAbout(javaSource())
+        .that(file)
+        .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(expected);
+        .and()
+        .generatesSources(expected);
   }
 
   @Test public void injectConstructorAndMembersInjection() {
@@ -519,7 +622,7 @@ public class MembersInjectionTest {
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
+        GENERATED_ANNOTATION_JAVAPOET,
         "public final class AllInjections_MembersInjector ",
         "    implements MembersInjector<AllInjections> {",
         "",
@@ -530,7 +633,12 @@ public class MembersInjectionTest {
         "    this.sProvider = sProvider;",
         "  }",
         "",
-        "  @Override public void injectMembers(AllInjections instance) {",
+        "  public static MembersInjector<AllInjections> create(Provider<String> sProvider) {",
+        "      return new AllInjections_MembersInjector(sProvider);",
+        "  }",
+        "",
+        "  @Override",
+        "  public void injectMembers(AllInjections instance) {",
         "    if (instance == null) {",
         "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
         "    }",
@@ -538,11 +646,13 @@ public class MembersInjectionTest {
         "    instance.s(sProvider.get());",
         "  }",
         "",
-        "  public static MembersInjector<AllInjections> create(Provider<String> sProvider) {",
-        "    return new AllInjections_MembersInjector(sProvider);",
+        "  public static void injectS(AllInjections instance, Provider<String> sProvider) {",
+        "    instance.s = sProvider.get();",
         "  }",
         "}");
-    assertAbout(javaSource()).that(file).processedWith(new ComponentProcessor())
+    assertAbout(javaSource())
+        .that(file)
+        .processedWith(new ComponentProcessor())
         .compilesWithoutError()
         .and()
         .generatesSources(expectedMembersInjector);
@@ -569,94 +679,345 @@ public class MembersInjectionTest {
         "import javax.annotation.Generated;",
         "import javax.inject.Provider;",
         "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
-        "public final class B_MembersInjector ",
-        "    implements MembersInjector<B> {",
-        "",
-        "  private final MembersInjector<A> supertypeInjector;",
+        GENERATED_ANNOTATION_JAVAPOET,
+        "public final class B_MembersInjector implements MembersInjector<B> {",
         "  private final Provider<String> sProvider;",
         "",
-        "  public B_MembersInjector(MembersInjector<A> supertypeInjector,",
-        "      Provider<String> sProvider) {",
-        "    assert supertypeInjector != null;",
-        "    this.supertypeInjector = supertypeInjector;",
+        "  public B_MembersInjector(Provider<String> sProvider) {",
         "    assert sProvider != null;",
         "    this.sProvider = sProvider;",
         "  }",
         "",
-        "  @Override public void injectMembers(B instance) {",
-        "    if (instance == null) {",
-        "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
-        "    }",
-        "    supertypeInjector.injectMembers(instance);",
-        "    instance.s = sProvider.get();",
+        "  public static MembersInjector<B> create(Provider<String> sProvider) {",
+        "      return new B_MembersInjector(sProvider);",
         "  }",
         "",
-        "  public static MembersInjector<B> create(",
-        "      MembersInjector<A> supertypeInjector,",
-        "      Provider<String> sProvider) {",
-        "    return new B_MembersInjector(supertypeInjector, sProvider);",
-        "  }",
-        "}");
-    assertAbout(javaSources()).that(ImmutableList.of(aFile, bFile))
-        .processedWith(new ComponentProcessor())
-        .compilesWithoutError()
-        .and().generatesSources(expectedMembersInjector);
-  }
-
-  @Test public void simpleComponentWithNesting() {
-    JavaFileObject nestedTypesFile = JavaFileObjects.forSourceLines("test.OuterType",
-        "package test;",
-        "",
-        "import dagger.Component;",
-        "import javax.inject.Inject;",
-        "",
-        "final class OuterType {",
-        "  static class A {",
-        "    @Inject A() {}",
-        "  }",
-        "  static class B {",
-        "    @Inject A a;",
-        "  }",
-        "  @Component interface SimpleComponent {",
-        "    A a();",
-        "    void inject(B b);",
-        "  }",
-        "}");
-    JavaFileObject bMembersInjector = JavaFileObjects.forSourceLines(
-        "test.OuterType$B_MembersInjector",
-        "package test;",
-        "",
-        "import dagger.MembersInjector;",
-        "import javax.annotation.Generated;",
-        "import javax.inject.Provider;",
-        "import test.OuterType.A;",
-        "import test.OuterType.B;",
-        "",
-        "@Generated(\"dagger.internal.codegen.ComponentProcessor\")",
-        "public final class OuterType$B_MembersInjector implements MembersInjector<B> {",
-        "  private final Provider<A> aProvider;",
-        "",
-        "  public OuterType$B_MembersInjector(Provider<A> aProvider) {",
-        "    assert aProvider != null;",
-        "    this.aProvider = aProvider;",
-        "  }",
-         "",
         "  @Override",
         "  public void injectMembers(B instance) {",
         "    if (instance == null) {",
         "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
         "    }",
-        "    instance.a = aProvider.get();",
+        "    instance.s = sProvider.get();",
         "  }",
         "",
-        "  public static MembersInjector<B> create(Provider<A> aProvider) {",
-        "    return new OuterType$B_MembersInjector(aProvider);",
+        "  public static void injectS(B instance, Provider<String> sProvider) {",
+        "    instance.s = sProvider.get();",
         "  }",
         "}");
-    assertAbout(javaSources()).that(ImmutableList.of(nestedTypesFile))
+    assertAbout(javaSources())
+        .that(ImmutableList.of(aFile, bFile))
         .processedWith(new ComponentProcessor())
         .compilesWithoutError()
-        .and().generatesSources(bMembersInjector);
+        .and()
+        .generatesSources(expectedMembersInjector);
+  }
+
+  @Test
+  public void simpleComponentWithNesting() {
+    JavaFileObject nestedTypesFile = JavaFileObjects.forSourceLines(
+          "test.OuterType",
+          "package test;",
+          "",
+          "import dagger.Component;",
+          "import javax.inject.Inject;",
+          "",
+          "final class OuterType {",
+          "  static class A {",
+          "    @Inject A() {}",
+          "  }",
+          "  static class B {",
+          "    @Inject A a;",
+          "  }",
+          "  @Component interface SimpleComponent {",
+          "    A a();",
+          "    void inject(B b);",
+          "  }",
+          "}");
+    JavaFileObject bMembersInjector = JavaFileObjects.forSourceLines(
+          "test.OuterType$B_MembersInjector",
+          "package test;",
+          "",
+          "import dagger.MembersInjector;",
+          "import javax.annotation.Generated;",
+          "import javax.inject.Provider;",
+          "",
+          GENERATED_ANNOTATION_JAVAPOET,
+          "public final class OuterType$B_MembersInjector implements MembersInjector<OuterType.B> {",
+          "  private final Provider<OuterType.A> aProvider;",
+          "",
+          "  public OuterType$B_MembersInjector(Provider<OuterType.A> aProvider) {",
+          "    assert aProvider != null;",
+          "    this.aProvider = aProvider;",
+          "  }",
+          "",
+          "  public static MembersInjector<OuterType.B> create(Provider<OuterType.A> aProvider) {",
+          "    return new OuterType$B_MembersInjector(aProvider);",
+          "  }",
+          "",
+          "  @Override",
+          "  public void injectMembers(OuterType.B instance) {",
+          "    if (instance == null) {",
+          "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
+          "    }",
+          "    instance.a = aProvider.get();",
+          "  }",
+          "",
+          "  public static void injectA(OuterType.B instance, Provider<OuterType.A> aProvider) {",
+          "    instance.a = aProvider.get();",
+          "  }",
+          "}");
+    assertAbout(javaSources())
+        .that(ImmutableList.of(nestedTypesFile))
+        .processedWith(new ComponentProcessor())
+        .compilesWithoutError()
+        .and()
+        .generatesSources(bMembersInjector);
+  }
+
+  @Test
+  public void componentWithNestingAndGeneratedType() {
+    JavaFileObject nestedTypesFile =
+        JavaFileObjects.forSourceLines(
+            "test.OuterType",
+            "package test;",
+            "",
+            "import dagger.Component;",
+            "import javax.inject.Inject;",
+            "",
+            "final class OuterType {",
+            "  @Inject GeneratedType generated;",
+            "  static class A {",
+            "    @Inject A() {}",
+            "  }",
+            "  static class B {",
+            "    @Inject A a;",
+            "  }",
+            "  @Component interface SimpleComponent {",
+            "    A a();",
+            "    void inject(B b);",
+            "  }",
+            "}");
+    JavaFileObject bMembersInjector =
+        JavaFileObjects.forSourceLines(
+            "test.OuterType$B_MembersInjector",
+            "package test;",
+            "",
+            "import dagger.MembersInjector;",
+            "import javax.annotation.Generated;",
+            "import javax.inject.Provider;",
+            "",
+            GENERATED_ANNOTATION_JAVAPOET,
+            "public final class OuterType$B_MembersInjector implements MembersInjector<OuterType.B> {",
+            "  private final Provider<OuterType.A> aProvider;",
+            "",
+            "  public OuterType$B_MembersInjector(Provider<OuterType.A> aProvider) {",
+            "    assert aProvider != null;",
+            "    this.aProvider = aProvider;",
+            "  }",
+            "",
+            "  public static MembersInjector<OuterType.B> create(Provider<OuterType.A> aProvider) {",
+            "    return new OuterType$B_MembersInjector(aProvider);",
+            "  }",
+            "",
+            "  @Override",
+            "  public void injectMembers(OuterType.B instance) {",
+            "    if (instance == null) {",
+            "      throw new NullPointerException(\"Cannot inject members into a null reference\");",
+            "    }",
+            "    instance.a = aProvider.get();",
+            "  }",
+            "",
+            "  public static void injectA(OuterType.B instance, Provider<OuterType.A> aProvider) {",
+            "    instance.a = aProvider.get();",
+            "  }",
+            "}");
+    assertAbout(javaSource())
+        .that(nestedTypesFile)
+        .processedWith(
+            new ComponentProcessor(),
+            new AbstractProcessor() {
+              private boolean done;
+
+              @Override
+              public Set<String> getSupportedAnnotationTypes() {
+                return ImmutableSet.of("*");
+              }
+
+              @Override
+              public boolean process(
+                  Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+                if (!done) {
+                  done = true;
+                  try (Writer writer =
+                          processingEnv
+                              .getFiler()
+                              .createSourceFile("test.GeneratedType")
+                              .openWriter()) {
+                    writer.write(
+                        Joiner.on('\n')
+                            .join(
+                                "package test;",
+                                "",
+                                "import javax.inject.Inject;",
+                                "",
+                                "class GeneratedType {",
+                                "  @Inject GeneratedType() {}",
+                                "}"));
+                  } catch (IOException e) {
+                    throw new RuntimeException(e);
+                  }
+                }
+                return false;
+              }
+            })
+        .compilesWithoutError()
+        .and()
+        .generatesSources(bMembersInjector);
+  }
+
+  @Test
+  public void lowerCaseNamedMembersInjector_forLowerCaseType() {
+    JavaFileObject foo =
+        JavaFileObjects.forSourceLines(
+            "test.foo",
+            "package test;",
+            "",
+            "import javax.inject.Inject;",
+            "",
+            "class foo {",
+            "  @Inject String string;",
+            "}");
+    JavaFileObject fooModule =
+        JavaFileObjects.forSourceLines(
+            "test.fooModule",
+            "package test;",
+            "",
+            "import dagger.Module;",
+            "import dagger.Provides;",
+            "",
+            "@Module",
+            "class fooModule {",
+            "  @Provides String string() { return \"foo\"; }",
+            "}");
+    JavaFileObject fooComponent =
+        JavaFileObjects.forSourceLines(
+            "test.fooComponent",
+            "package test;",
+            "",
+            "import dagger.Component;",
+            "",
+            "@Component(modules = fooModule.class)",
+            "interface fooComponent {",
+            "  void inject(foo target);",
+            "}");
+
+    assertAbout(javaSources())
+        .that(ImmutableList.of(foo, fooModule, fooComponent))
+        .processedWith(new ComponentProcessor())
+        .compilesWithoutError()
+        .and().generatesFileNamed(CLASS_OUTPUT, "test", "foo_MembersInjector.class");
+  }
+
+  @Test
+  public void fieldInjectionForShadowedMember() {
+    JavaFileObject foo =
+        JavaFileObjects.forSourceLines(
+            "test.Foo",
+            "package test;",
+            "",
+            "import javax.inject.Inject;",
+            "",
+            "class Foo {",
+            "  @Inject Foo() {}",
+            "}");
+    JavaFileObject bar =
+        JavaFileObjects.forSourceLines(
+            "test.Bar",
+            "package test;",
+            "",
+            "import javax.inject.Inject;",
+            "",
+            "class Bar {",
+            "  @Inject Bar() {}",
+            "}");
+    JavaFileObject parent =
+        JavaFileObjects.forSourceLines(
+            "test.Parent",
+            "package test;",
+            "",
+            "import javax.inject.Inject;",
+            "",
+            "class Parent { ",
+            "  @Inject Foo object;",
+            "}");
+    JavaFileObject child =
+        JavaFileObjects.forSourceLines(
+            "test.Child",
+            "package test;",
+            "",
+            "import javax.inject.Inject;",
+            "",
+            "class Child extends Parent { ",
+            "  @Inject Bar object;",
+            "}");
+    JavaFileObject component =
+        JavaFileObjects.forSourceLines(
+            "test.C",
+            "package test;",
+            "",
+            "import dagger.Component;",
+            "",
+            "@Component",
+            "interface C { ",
+            "  void inject(Child child);",
+            "}");
+
+    JavaFileObject expectedMembersInjector =
+        JavaFileObjects.forSourceLines(
+            "test.Child_MembersInjector",
+            "package test;",
+            "",
+            "import dagger.MembersInjector;",
+            "import javax.annotation.Generated;",
+            "import javax.inject.Provider;",
+            "",
+            GENERATED_ANNOTATION_JAVAPOET,
+            "public final class Child_MembersInjector implements MembersInjector<Child> {",
+            "  private final Provider<Foo> objectProvider;",
+            "  private final Provider<Bar> objectProvider2;",
+            "",
+            "  public Child_MembersInjector(",
+            "        Provider<Foo> objectProvider, Provider<Bar> objectProvider2) {",
+            "    assert objectProvider != null;",
+            "    this.objectProvider = objectProvider;",
+            "    assert objectProvider2 != null;",
+            "    this.objectProvider2 = objectProvider2;",
+            "  }",
+            "",
+            "  public static MembersInjector<Child> create(",
+            "      Provider<Foo> objectProvider, Provider<Bar> objectProvider2) {",
+            "    return new Child_MembersInjector(objectProvider, objectProvider2);",
+            "  }",
+            "",
+            "  @Override",
+            "  public void injectMembers(Child instance) {",
+            "    if (instance == null) {",
+            "      throw new NullPointerException(",
+            "          \"Cannot inject members into a null reference\");",
+            "    }",
+            "    ((Parent) instance).object = objectProvider.get();",
+            "    instance.object = objectProvider2.get();",
+            "  }",
+            "",
+            "  public static void injectObject(Child instance, Provider<Bar> objectProvider) {",
+            "    instance.object = objectProvider.get();",
+            "  }",
+            "}");
+
+    assertAbout(javaSources())
+        .that(ImmutableList.of(foo, bar, parent, child, component))
+        .processedWith(new ComponentProcessor())
+        .compilesWithoutError()
+        .and().generatesSources(expectedMembersInjector);
   }
 }

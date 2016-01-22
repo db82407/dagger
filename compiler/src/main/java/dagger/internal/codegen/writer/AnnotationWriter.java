@@ -15,10 +15,12 @@
  */
 package dagger.internal.codegen.writer;
 
-import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.SortedMap;
@@ -27,6 +29,7 @@ import static dagger.internal.codegen.writer.Writables.toStringWritable;
 
 public final class AnnotationWriter implements Writable, HasClassReferences {
   private final ClassName annotationName;
+  private final Set<HasClassReferences> memberReferences = Sets.newLinkedHashSet();
   private final SortedMap<String, Writable> memberMap = Maps.newTreeMap();
 
   AnnotationWriter(ClassName annotationName) {
@@ -45,18 +48,29 @@ public final class AnnotationWriter implements Writable, HasClassReferences {
     memberMap.put(name, toStringWritable(StringLiteral.forValue(value)));
   }
 
+  public <T extends Enum<T>> void setMember(String name, T value) {
+    Snippet snippet = Snippet.format("%s.%s", ClassName.fromClass(value.getClass()), value);
+    memberMap.put(name, snippet);
+    memberReferences.add(snippet);
+  }
+
   @Override
   public Appendable write(Appendable appendable, Context context) throws IOException {
     appendable.append('@');
     annotationName.write(appendable, context);
     if (!memberMap.isEmpty()) {
       appendable.append('(');
-      if (memberMap.size() == 1) {
-        Entry<String, Writable> onlyEntry = Iterables.getOnlyElement(memberMap.entrySet());
-        if (!onlyEntry.getKey().equals("value")) {
-          appendable.append(onlyEntry.getKey()).append(" = ");
+      boolean singleEntry = memberMap.size() == 1;
+      Iterator<Entry<String, Writable>> iterator = memberMap.entrySet().iterator();
+      while (iterator.hasNext()) {
+        Entry<String, Writable> member = iterator.next();
+        if (!singleEntry || !member.getKey().equals("value")) {
+          appendable.append(member.getKey()).append(" = ");
         }
-        onlyEntry.getValue().write(appendable, context);
+        member.getValue().write(appendable, context);
+        if (iterator.hasNext()) {
+          appendable.append(",");
+        }
       }
       appendable.append(')');
     }
@@ -65,6 +79,9 @@ public final class AnnotationWriter implements Writable, HasClassReferences {
 
   @Override
   public Set<ClassName> referencedClasses() {
-    return ImmutableSet.of(annotationName);
+    return FluentIterable.from(memberReferences)
+        .append(annotationName)
+        .transformAndConcat(HasClassReferences.COMBINER)
+        .toSet();
   }
 }

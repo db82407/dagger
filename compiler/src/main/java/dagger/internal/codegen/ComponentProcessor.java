@@ -17,12 +17,9 @@ package dagger.internal.codegen;
 
 import com.google.auto.common.BasicAnnotationProcessor;
 import com.google.auto.service.AutoService;
+import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import dagger.Module;
-import dagger.Provides;
-import dagger.producers.ProducerModule;
-import dagger.producers.Produces;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
@@ -61,12 +58,14 @@ public final class ComponentProcessor extends BasicAnnotationProcessor {
   public Set<String> getSupportedOptions() {
     return ImmutableSet.of(
         DISABLE_INTER_COMPONENT_SCOPE_VALIDATION_KEY,
-        NULLABLE_VALIDATION_KEY
+        NULLABLE_VALIDATION_KEY,
+        PRIVATE_MEMBER_VALIDATION_TYPE_KEY,
+        STATIC_MEMBER_VALIDATION_TYPE_KEY
     );
   }
 
   @Override
-  protected Iterable<ProcessingStep> initSteps() {
+  protected Iterable<? extends ProcessingStep> initSteps() {
     Messager messager = processingEnv.getMessager();
     Types types = processingEnv.getTypeUtils();
     Elements elements = processingEnv.getElementUtils();
@@ -76,96 +75,110 @@ public final class ComponentProcessor extends BasicAnnotationProcessor {
         nullableValidationType(processingEnv).diagnosticKind().get();
 
     MethodSignatureFormatter methodSignatureFormatter = new MethodSignatureFormatter(types);
-    ProvisionBindingFormatter provisionBindingFormatter =
-        new ProvisionBindingFormatter(methodSignatureFormatter);
-    ProductionBindingFormatter productionBindingFormatter =
-        new ProductionBindingFormatter(methodSignatureFormatter);
+    HasSourceElementFormatter hasSourceElementFormatter =
+        new HasSourceElementFormatter(methodSignatureFormatter);
     DependencyRequestFormatter dependencyRequestFormatter = new DependencyRequestFormatter(types);
     KeyFormatter keyFormatter = new KeyFormatter();
 
     InjectConstructorValidator injectConstructorValidator = new InjectConstructorValidator();
-    InjectFieldValidator injectFieldValidator = new InjectFieldValidator();
-    InjectMethodValidator injectMethodValidator = new InjectMethodValidator();
-    ModuleValidator moduleValidator = new ModuleValidator(types, elements, methodSignatureFormatter,
-        Module.class, Provides.class);
-    ProvidesMethodValidator providesMethodValidator = new ProvidesMethodValidator(elements);
-    BuilderValidator componentBuilderValidator =
-        new BuilderValidator(elements, types, ComponentDescriptor.Kind.COMPONENT);
-    BuilderValidator subcomponentBuilderValidator =
-        new BuilderValidator(elements, types, ComponentDescriptor.Kind.SUBCOMPONENT);
-    ComponentValidator subcomponentValidator = ComponentValidator.createForSubcomponent(elements,
-        types, moduleValidator, subcomponentBuilderValidator);
-    ComponentValidator componentValidator = ComponentValidator.createForComponent(elements, types,
-        moduleValidator, subcomponentValidator, subcomponentBuilderValidator);
+    InjectFieldValidator injectFieldValidator = new InjectFieldValidator(
+        privateMemberValidationType(processingEnv).diagnosticKind().get(),
+        staticMemberValidationType(processingEnv).diagnosticKind().get());
+    InjectMethodValidator injectMethodValidator = new InjectMethodValidator(
+        privateMemberValidationType(processingEnv).diagnosticKind().get(),
+        staticMemberValidationType(processingEnv).diagnosticKind().get());
+    MembersInjectedTypeValidator membersInjectedTypeValidator =
+        new MembersInjectedTypeValidator(injectFieldValidator, injectMethodValidator);
+    ModuleValidator moduleValidator =
+        new ModuleValidator(types, elements, methodSignatureFormatter);
+    BuilderValidator builderValidator = new BuilderValidator(elements, types);
+    ComponentValidator subcomponentValidator =
+        ComponentValidator.createForSubcomponent(
+            elements, types, moduleValidator, builderValidator);
+    ComponentValidator componentValidator =
+        ComponentValidator.createForComponent(
+            elements, types, moduleValidator, subcomponentValidator, builderValidator);
     MapKeyValidator mapKeyValidator = new MapKeyValidator();
-    ModuleValidator producerModuleValidator = new ModuleValidator(types, elements,
-        methodSignatureFormatter, ProducerModule.class, Produces.class);
-    ProducesMethodValidator producesMethodValidator = new ProducesMethodValidator(elements);
-    ProductionComponentValidator productionComponentValidator = new ProductionComponentValidator();
+    ProvidesMethodValidator providesMethodValidator = new ProvidesMethodValidator(elements, types);
+    ProducesMethodValidator producesMethodValidator = new ProducesMethodValidator(elements, types);
 
     Key.Factory keyFactory = new Key.Factory(types, elements);
 
-    this.factoryGenerator =
-        new FactoryGenerator(filer, DependencyRequestMapper.FOR_PROVIDER, nullableDiagnosticType);
-    this.membersInjectorGenerator =
-        new MembersInjectorGenerator(filer, elements, types, DependencyRequestMapper.FOR_PROVIDER);
-    ComponentGenerator componentGenerator =
-        new ComponentGenerator(filer, types, nullableDiagnosticType);
-    ProducerFactoryGenerator producerFactoryGenerator =
-        new ProducerFactoryGenerator(filer, DependencyRequestMapper.FOR_PRODUCER);
+    MultibindingsValidator multibindingsValidator =
+        new MultibindingsValidator(elements, keyFactory, keyFormatter, methodSignatureFormatter);
 
-    DependencyRequest.Factory dependencyRequestFactory = new DependencyRequest.Factory(keyFactory);
+    this.factoryGenerator =
+        new FactoryGenerator(
+            filer, elements, DependencyRequestMapper.FOR_PROVIDER, nullableDiagnosticType);
+    this.membersInjectorGenerator =
+        new MembersInjectorGenerator(filer, elements, DependencyRequestMapper.FOR_PROVIDER);
+    ComponentGenerator componentGenerator =
+        new ComponentGenerator(filer, elements, types, keyFactory, nullableDiagnosticType);
+    ProducerFactoryGenerator producerFactoryGenerator =
+        new ProducerFactoryGenerator(filer, elements, DependencyRequestMapper.FOR_PRODUCER);
+    MonitoringModuleGenerator monitoringModuleGenerator =
+        new MonitoringModuleGenerator(filer, elements);
+
+    DependencyRequest.Factory dependencyRequestFactory =
+        new DependencyRequest.Factory(elements, keyFactory);
     ProvisionBinding.Factory provisionBindingFactory =
         new ProvisionBinding.Factory(elements, types, keyFactory, dependencyRequestFactory);
     ProductionBinding.Factory productionBindingFactory =
         new ProductionBinding.Factory(types, keyFactory, dependencyRequestFactory);
+    MultibindingDeclaration.Factory multibindingDeclarationFactory =
+        new MultibindingDeclaration.Factory(elements, types, keyFactory);
 
     MembersInjectionBinding.Factory membersInjectionBindingFactory =
         new MembersInjectionBinding.Factory(elements, types, keyFactory, dependencyRequestFactory);
 
-    this.injectBindingRegistry = new InjectBindingRegistry(
-        elements, types, messager, provisionBindingFactory, membersInjectionBindingFactory);
+    this.injectBindingRegistry =
+        new InjectBindingRegistry(
+            elements,
+            types,
+            messager,
+            injectConstructorValidator,
+            membersInjectedTypeValidator,
+            keyFactory,
+            provisionBindingFactory,
+            membersInjectionBindingFactory);
 
-    ModuleDescriptor.Factory moduleDescriptorFactory = new ModuleDescriptor.Factory(
-        elements, provisionBindingFactory, productionBindingFactory);
+    ModuleDescriptor.Factory moduleDescriptorFactory =
+        new ModuleDescriptor.Factory(
+            elements,
+            provisionBindingFactory,
+            productionBindingFactory,
+            multibindingDeclarationFactory);
 
     ComponentDescriptor.Factory componentDescriptorFactory = new ComponentDescriptor.Factory(
         elements, types, dependencyRequestFactory, moduleDescriptorFactory);
 
-    BindingGraph.Factory bindingGraphFactory = new BindingGraph.Factory(
-        elements,
-        injectBindingRegistry,
-        keyFactory,
-        dependencyRequestFactory,
-        provisionBindingFactory,
-        productionBindingFactory);
-
-    MapKeyGenerator mapKeyGenerator = new MapKeyGenerator(filer);
-    BindingGraphValidator bindingGraphValidator = new BindingGraphValidator(
-        types,
-        injectBindingRegistry,
-        scopeValidationType(processingEnv),
-        nullableDiagnosticType,
-        provisionBindingFormatter,
-        productionBindingFormatter,
-        methodSignatureFormatter,
-        dependencyRequestFormatter,
-        keyFormatter);
-
-    return ImmutableList.<ProcessingStep>of(
-        new MapKeyProcessingStep(
-            messager,
-            types,
-            mapKeyValidator,
-            mapKeyGenerator),
-        new InjectProcessingStep(
-            messager,
-            injectConstructorValidator,
-            injectFieldValidator,
-            injectMethodValidator,
+    BindingGraph.Factory bindingGraphFactory =
+        new BindingGraph.Factory(
+            elements,
+            injectBindingRegistry,
+            keyFactory,
             provisionBindingFactory,
-            membersInjectionBindingFactory,
-            injectBindingRegistry),
+            productionBindingFactory);
+
+    MapKeyGenerator mapKeyGenerator = new MapKeyGenerator(filer, elements);
+    ComponentHierarchyValidator componentHierarchyValidator = new ComponentHierarchyValidator();
+    BindingGraphValidator bindingGraphValidator =
+        new BindingGraphValidator(
+            types,
+            injectBindingRegistry,
+            scopeValidationType(processingEnv),
+            nullableDiagnosticType,
+            hasSourceElementFormatter,
+            methodSignatureFormatter,
+            dependencyRequestFormatter,
+            keyFormatter,
+            keyFactory);
+
+    return ImmutableList.of(
+        new MapKeyProcessingStep(messager, types, mapKeyValidator, mapKeyGenerator),
+        new InjectProcessingStep(injectBindingRegistry),
+        new MonitoringModuleProcessingStep(messager, monitoringModuleGenerator),
+        new MultibindingsProcessingStep(messager, multibindingsValidator),
         new ModuleProcessingStep(
             messager,
             moduleValidator,
@@ -173,24 +186,29 @@ public final class ComponentProcessor extends BasicAnnotationProcessor {
             provisionBindingFactory,
             factoryGenerator),
         new ComponentProcessingStep(
+            ComponentDescriptor.Kind.COMPONENT,
             messager,
             componentValidator,
             subcomponentValidator,
-            componentBuilderValidator,
-            subcomponentBuilderValidator,
+            builderValidator,
+            componentHierarchyValidator,
             bindingGraphValidator,
             componentDescriptorFactory,
             bindingGraphFactory,
             componentGenerator),
         new ProducerModuleProcessingStep(
             messager,
-            producerModuleValidator,
+            moduleValidator,
             producesMethodValidator,
             productionBindingFactory,
             producerFactoryGenerator),
-        new ProductionComponentProcessingStep(
+        new ComponentProcessingStep(
+            ComponentDescriptor.Kind.PRODUCTION_COMPONENT,
             messager,
-            productionComponentValidator,
+            componentValidator,
+            subcomponentValidator,
+            builderValidator,
+            componentHierarchyValidator,
             bindingGraphValidator,
             componentDescriptorFactory,
             bindingGraphFactory,
@@ -212,6 +230,12 @@ public final class ComponentProcessor extends BasicAnnotationProcessor {
 
   private static final String NULLABLE_VALIDATION_KEY = "dagger.nullableValidation";
 
+  private static final String PRIVATE_MEMBER_VALIDATION_TYPE_KEY =
+      "dagger.privateMemberValidation";
+
+  private static final String STATIC_MEMBER_VALIDATION_TYPE_KEY =
+      "dagger.staticMemberValidation";
+
   private static ValidationType scopeValidationType(ProcessingEnvironment processingEnv) {
     return valueOf(processingEnv,
         DISABLE_INTER_COMPONENT_SCOPE_VALIDATION_KEY,
@@ -226,12 +250,28 @@ public final class ComponentProcessor extends BasicAnnotationProcessor {
         EnumSet.of(ValidationType.ERROR, ValidationType.WARNING));
   }
 
+  private static ValidationType privateMemberValidationType(ProcessingEnvironment processingEnv) {
+    return valueOf(processingEnv,
+        PRIVATE_MEMBER_VALIDATION_TYPE_KEY,
+        ValidationType.ERROR,
+        EnumSet.of(ValidationType.ERROR, ValidationType.WARNING));
+  }
+
+  private static ValidationType staticMemberValidationType(ProcessingEnvironment processingEnv) {
+    return valueOf(processingEnv,
+        STATIC_MEMBER_VALIDATION_TYPE_KEY,
+        ValidationType.ERROR,
+        EnumSet.of(ValidationType.ERROR, ValidationType.WARNING));
+  }
+
   private static <T extends Enum<T>> T valueOf(ProcessingEnvironment processingEnv, String key,
       T defaultValue, Set<T> validValues) {
     Map<String, String> options = processingEnv.getOptions();
     if (options.containsKey(key)) {
       try {
-        T type = Enum.valueOf(defaultValue.getDeclaringClass(), options.get(key).toUpperCase());
+        T type = Enum.valueOf(
+            defaultValue.getDeclaringClass(),
+            Ascii.toUpperCase(options.get(key)));
         if (!validValues.contains(type)) {
           throw new IllegalArgumentException(); // let handler below print out good msg.
         }
