@@ -7,6 +7,7 @@ class Thermosiphon implements Pump {
 
   @Inject
   Thermosiphon(Heater heater) {
+	System.out.println("@Inject Thermosiphon");
     this.heater = heater;
   }
 

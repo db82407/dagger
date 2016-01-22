@@ -1,11 +1,21 @@
 package coffee2;
 
-import dagger.Module;
-import dagger.Provides;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 
-@Module
+import dagger.producers.ProducerModule;
+import dagger.producers.Produces;
+
+@ProducerModule
 class PumpModule {
-  @Provides Pump providePump(Thermosiphon pump) {
-    return pump;
-  }
+    @Produces
+    ListenableFuture<Pump> producePump(Thermosiphon pump) {
+        System.out.println("@Producing Pump..");
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException e) {
+        }
+        System.out.println("done @Producing Pump");
+        return Futures.immediateFuture((Pump)pump);
+    }
 }

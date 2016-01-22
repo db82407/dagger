@@ -4,9 +4,10 @@ import dagger.Module;
 import dagger.Provides;
 import javax.inject.Singleton;
 
-@Module(includes = PumpModule.class)
+@Module
 class DripCoffeeModule {
   @Provides @Singleton Heater provideHeater() {
+	System.out.println("@Provide Heater");
     return new ElectricHeater();
   }
 }

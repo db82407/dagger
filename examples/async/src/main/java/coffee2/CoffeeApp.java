@@ -1,19 +1,30 @@
 package coffee2;
 
-import dagger.Component;
+import dagger.producers.ProductionComponent;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import javax.inject.Singleton;
 
-import coffee2.DaggerCoffeeApp_Coffee;
+import com.google.common.util.concurrent.ListenableFuture;
 
 public class CoffeeApp {
   @Singleton
-  @Component(modules = { DripCoffeeModule.class })
+  @ProductionComponent(modules = { AsyncCoffeeModule.class, DripCoffeeModule.class, PumpModule.class })
   public interface Coffee {
-    CoffeeMaker maker();
+      ListenableFuture<CoffeeMaker> maker();
   }
 
-  public static void main(String[] args) {
-    Coffee coffee = DaggerCoffeeApp_Coffee.builder().build();
-    coffee.maker().brew();
+  public static void main(String[] args) throws Exception {
+      ExecutorService es = Executors.newFixedThreadPool(3);
+
+      Coffee coffee = DaggerCoffeeApp_Coffee.builder()
+              .executor(es).build();
+
+      CoffeeMaker maker = coffee.maker().get();
+      maker.brew();
+
+      es.shutdownNow();
   }
 }
